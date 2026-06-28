@@ -1,43 +1,32 @@
 import copy
-from Population import Popluation
+from alloy_prediction.optimizers.genetic.population import Population
+from alloy_prediction.optimizers.base_optimizer import BaseOptimizer
 
-
-class GeneticAlgorithm:
-    def __init__(self,crossover,fitness_metric,mutator,population: Popluation,selector_function):
+class GeneticAlgorithm(BaseOptimizer):
+    def __init__(self, continue_generating, crossover, mutator, objective, optimization_stopping_function, population: Population, predictor, selector_function):
+        super().__init__(predictor, objective)
 
         self.population = population
         self.crossover = crossover
-        self.fitness_metric = fitness_metric
         self.mutator = mutator
         self.selector_function = selector_function
-               
+        self.continue_generating = continue_generating
+        self.optimization_stopping_function = optimization_stopping_function
 
-    def next_generation(self,stopping_function):
-        # needed for method 2
-        fitness_scores = self.population.evaluate(self.fitness_metric,0)
+   
+    def _evaluate_population(self, population):
+        for chromosome in population:
+            chromosome.update_fitness(self.predictor,self.objective,)
+   
+    def _generate_next_population(self, population):
+        self._evaluate_population(population)
 
-        next_population = Population([])
-        # stopping_function will output 1 uptil a desired condition is filled for
-        # given current population and evolving next population
-        while stopping_function(self.population,next_population):
-            # design pattern 1
-            # parent_1, parent_2 = self.selector_function(
-            #     self.population,
-            #     self.fitness_evaluator
-            # ) 
+        next_population = Population(chromosomes=[],generation=population.generation + 1,)
 
-            # bad design pattern selector need to remember the 
-            # evaluation metric and need to call it explicitly 
-            # inside its operation need to do seperation of 
-            # concern wants just fitness scores to work with not
-            # the full method how fitness scores are calculated 
-            
-            # Method 2
+        next_population.add_individual(copy.deepcopy(population.best_individual()))  
 
-            parent_1, parent_2 = self.selector_function(
-                self.population,
-                fitness_scores,
-            )
+        while self.continue_generating(population,next_population):
+            parent_1, parent_2 = self.selector_function(population,)
 
             child_1, child_2 = self.crossover(parent_1,parent_2)
 
@@ -48,12 +37,43 @@ class GeneticAlgorithm:
             next_population.add_individual(child_2)
 
         return next_population
+    
 
-    def give_nth_generation(self, n, stopping_function):
-
-        for i in range(n):
-            self.population = self.next_generation(stopping_function)
-
+    # internal state changing functions
+    def next_generation(self):
+        self.population = self._generate_next_population(self.population)
+        return self.population
+    
+    def advance_n_generations(self, n):
+        for _ in range(n):
+            self.next_generation()
         return self.population
 
-        
+    def predict_nth_generation(self, n):
+        output = copy.deepcopy(self.population)
+        for _ in range(n):
+            output = self._generate_next_population(output)
+        return output
+
+
+    def optimize(self):
+        history = []
+
+        while True:
+            self._evaluate_population(self.population)
+            history.append({
+                "generation": self.population.generation,
+                "best": self.population.best_fitness,
+                "average": self.population.average_fitness,
+            })
+
+            previous_best = self.population.best_fitness
+            self.next_generation()
+            self._evaluate_population(self.population)
+
+            if self.optimization_stopping_function(previous_best,self.population.best_fitness,):
+                break
+
+        return history
+                    
+                
