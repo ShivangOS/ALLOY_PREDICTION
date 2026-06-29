@@ -61,7 +61,7 @@ class HEADataLoader(BaseDataLoader):
 
     def preprocess(self):
 
-        self._clean_coolumn_names()
+        self._clean_column_names()
         self._remove_invalid_rows()
         self._clean_units()
         self._normalize_labels()
@@ -102,7 +102,7 @@ class HEADataLoader(BaseDataLoader):
     # Individual preprocessing steps #
     ##################################
 
-    def _clean_coolumn_names(self):
+    def _clean_column_names(self):
         """Remove accidental spaces from column names"""
         
         self._data.columns = self._data.columns.str.strip()
@@ -132,6 +132,18 @@ class HEADataLoader(BaseDataLoader):
             else:
                 print(f"Warning: Column '{col}' not found in the dataset.") 
 
+    def _extract_numeric_value(self, series):
+        """Extract the first numeric value from strings like '1000?', '1200 C', etc."""
+
+        cleaned = (
+            series
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.extract(r"([-+]?\d*\.?\d+)")[0]
+        )
+
+        return pd.to_numeric(cleaned, errors="coerce")
+
     def _remove_unwanted_columns(self):
         """Remove columns that are not suitable as model features.
 
@@ -140,10 +152,10 @@ class HEADataLoader(BaseDataLoader):
         - Data leakage
         - Extremely sparse columns
         - Inconsistent formatting"""
-        self._data = self._data.drop(
-            columns=self.excluded_columns,
-            errors="ignore",
-        )
+        columns_to_drop = [col for col in self.excluded_columns if col in self._data.columns and col != self.target]
+        self._data = self._data.drop(columns=columns_to_drop,errors="ignore",)
+        # First line makes sure that target is not dropped even if it's in excluded_columns.
+        
     def _fill_missing_values(self):
         """Fill missing values in the dataset."""
         numeric_cols = self._data.select_dtypes(include=["number"]).columns
