@@ -7,6 +7,26 @@ from alloy_prediction.data.base_data_loader import BaseDataLoader
 
 class HEADataLoader(BaseDataLoader):
 
+    DESCRIPTOR_COLUMNS = [
+        "Num_of_Elem",
+        "Density_calc",
+        "dHmix",
+        "dSmix",
+        "dGmix",
+        "Tm",
+        "n.Para",
+        "Atom.Size.Diff",
+        "Elect.Diff",
+        "VEC",
+    ]
+
+    NUMERIC_LIKE_COLUMNS = [
+        "Homogenization_Temp",
+        "Homogenization_Time",
+        "Annealing_Temp",
+        "Annealing_Time_(min)",
+    ]
+
     def __init__(
         self,
         csv_path,
@@ -15,6 +35,8 @@ class HEADataLoader(BaseDataLoader):
         test_size=0.2,
         random_state=42,
         shuffle=True,
+        encoding = "latin1",
+        stratify = True,
     ):
 
         super().__init__()
@@ -27,6 +49,8 @@ class HEADataLoader(BaseDataLoader):
         self.test_size = test_size
         self.random_state = random_state
         self.shuffle = shuffle
+        self.encoding = encoding
+        self.stratify = stratify
 
     ##################################
     # Pipeline                       #
@@ -37,12 +61,13 @@ class HEADataLoader(BaseDataLoader):
 
     def preprocess(self):
 
+        self._clean_coolumn_names()
         self._remove_invalid_rows()
-        # self._clean_units()
+        self._clean_units()
         self._normalize_labels()
         self._remove_unwanted_columns()
         self._fill_missing_values()
-        # self._create_descriptors()
+        self._create_descriptors()
         self._encode_categorical_columns()
         self._build_dataset()
 
@@ -50,7 +75,15 @@ class HEADataLoader(BaseDataLoader):
 
 
     def split(self):
+        ######################################################################
+        stratify_values = None
 
+        if self.stratify and self.shuffle:
+            class_counts = self._y.value_counts(dropna=False)
+
+            if len(class_counts) > 1 and class_counts.min() >= 2:
+                stratify_values = self._y
+        ###########ADDED THIS BLOCK, ANY MALFUNTION TRY REMOVING IT##########
         (
             self._X_train,
             self._X_test,
@@ -62,46 +95,42 @@ class HEADataLoader(BaseDataLoader):
             test_size=self.test_size,
             random_state=self.random_state,
             shuffle=self.shuffle,
+            stratify=stratify_values, 
         )
 
     ##################################
     # Individual preprocessing steps #
     ##################################
 
+    def _clean_coolumn_names(self):
+        """Remove accidental spaces from column names"""
+        
+        self._data.columns = self._data.columns.str.strip()
+        self.excluded_columns = [col.strip() for col in self.excluded_columns]
+        self.target = self.target.strip()
+
+
     def _remove_invalid_rows(self):
         if self.target not in self._data.columns:
             raise ValueError(f"Target '{self.target}' not found.")
 
         self._data = self._data.dropna(subset=[self.target])
+        self._data = self._data[
+            self._data[self.target].astype(str).str.strip() != ""
+        ]
 
     def _normalize_labels(self):
         """Normalize the target labels to a standard format."""
         self._data[self.target] = self._data[self.target].str.strip().str.lower()
         
-    def _encode_categorical_columns(self):
-        """Encode categorical columns using one-hot encoding."""
-        categorical_cols = self._data.select_dtypes(include=['object', 'category']).columns.tolist()
-        categorical_cols = [col for col in categorical_cols if col != self.target]
-        
-        self._data = pd.get_dummies(self._data, columns=categorical_cols, drop_first=True)
 
-    def _fill_missing_values(self):
-        """Fill missing values in the dataset."""
-        self._data = self._data.fillna(self._data.mean(numeric_only=True))
-
-    # Have to write some expressions, just update in whatsapp group if this block and next block is updated.
-    # def _create_descriptors(self):
-    #     """Create additional descriptors or features from existing data."""
-    #     # Example: Create a new feature based on existing columns
-    #     if 'column1' in self._data.columns and 'column2' in self._data.columns:
-    #         self._data['new_feature'] = self._data['column1'] / (self._data['column2'] + 1e-5)
-
-    # def _clean_units(self):
-    #     """Clean and standardize units in the dataset."""
-    #     # Example: Convert all temperature columns to Celsius
-    #     for col in self._data.columns:
-    #         if 'temperature' in col.lower():
-    #             self._data[col] = self._data[col].apply(self._convert_to_celsius)
+    def _clean_units(self):
+        """Convert numeric-looking processing columns into numeric values"""
+        for col in self.NUMERIC_LIKE_COLUMNS:
+            if col in self._data.columns:
+                self._data[col] = self._extract_numeric_value(self._data[col])
+            else:
+                print(f"Warning: Column '{col}' not found in the dataset.") 
 
     def _remove_unwanted_columns(self):
         """Remove columns that are not suitable as model features.
@@ -115,8 +144,51 @@ class HEADataLoader(BaseDataLoader):
             columns=self.excluded_columns,
             errors="ignore",
         )
+    def _fill_missing_values(self):
+        """Fill missing values in the dataset."""
+        numeric_cols = self._data.select_dtypes(include=["number"]).columns
 
-    
+        self._data[numeric_cols] = self._data[numeric_cols].fillna(
+            self._data[numeric_cols].median()
+        )
+
+        categorical_cols = self._data.select_dtypes(
+            include=["object", "category"]
+        ).columns.tolist()
+
+        categorical_cols = [col for col in categorical_cols if col != self.target]
+
+        self._data[categorical_cols] = self._data[categorical_cols].fillna(
+            "Unknown"
+        )
+
+    def _create_descriptors(self):
+        """Use existing descriptor columns if present.
+
+        The dataset already contains descriptor columns, so this function
+        does not recalculate them.
+        """
+
+        existing_descriptors = [
+            col for col in self.DESCRIPTOR_COLUMNS
+            if col in self._data.columns
+        ]
+
+        missing_descriptors = [
+            col for col in self.DESCRIPTOR_COLUMNS
+            if col not in self._data.columns
+        ]
+
+        self._existing_descriptors = existing_descriptors
+        self._missing_descriptors = missing_descriptors
+
+    def _encode_categorical_columns(self):
+        """Encode categorical columns using one-hot encoding."""
+        categorical_cols = self._data.select_dtypes(include=['object', 'category']).columns.tolist()
+        categorical_cols = [col for col in categorical_cols if col != self.target]
+        
+        self._data = pd.get_dummies(self._data, columns=categorical_cols, drop_first=True)
+
     def _build_dataset(self):
 
         self._X = self._data.drop(columns=[self.target])
